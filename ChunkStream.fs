@@ -1,4 +1,5 @@
 // TODO: flatten version sent state to get around non-buffered send API
+// TODO: use a custom binary parser combinator setup rather than custom functions for serialize and deserialize
 
 module rtmpoop.ChunkStream
 
