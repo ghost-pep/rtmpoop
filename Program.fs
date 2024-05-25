@@ -1,11 +1,9 @@
 ﻿open rtmpoop.ChunkStream
 
 printfn "Starting up"
-let appstate = createAppState ()
+let appstate = createAppState 1935
 printfn "Created app state"
-let state2 = receive appstate
-printfn "Received state"
 
-match state2 with
-| Ok(s) -> printfn "Received state: %A" s
-| Error(e) -> printfn "Error: %s" e
+match run appstate with
+| Ok(_) -> printfn "Impossible"
+| Error e -> printfn "%s" e
