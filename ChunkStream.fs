@@ -42,10 +42,11 @@ let message1Size = 4 + 4 + randomDataLen
 
 let createMessage1 () =
     let rand = System.Random() in
-
+    let rand_data = [| for _ in 0 .. randomDataLen - 1 -> uint8 (rand.Next()) |]
+    printfn "Rand data %A" rand_data
     { time = epochStart
       zero_time = 0u
-      random_data = [| for _ in 0 .. randomDataLen - 1 -> uint8 (rand.Next()) |] }
+      random_data = rand_data }
 
 type Message2 =
     {
@@ -56,6 +57,8 @@ type Message2 =
         /// Random data field from Message1
         random_echo: uint8 array
     }
+    
+let message2Size = message1Size
 
 let createMessage2 (cur: Time) (m1: Message1) =
     { time = m1.time
@@ -152,13 +155,21 @@ let parseMessage0 (msg_bytes: byte array) =
         Ok { version = ver } )
         
 let parseMessage1 (msg_bytes: byte array) : Result<Message1, string>= 
-    if msg_bytes.Length < 1528 + 4 then Error "Not enough bytes for a parsed M1"
+    if msg_bytes.Length < randomDataLen + 4 then Error "Not enough bytes for a parsed M1"
     else(
         Ok { time = System.BitConverter.ToUInt32 msg_bytes[0..3] 
              zero_time = System.BitConverter.ToUInt32 msg_bytes[4..7]
              // we skip an extra word here because the spec has zeros in time2 slot (which I didn't represent in data model)
              random_data = msg_bytes[8..8 + randomDataLen - 1]})
         
+let parseMessage2 (msg_bytes: byte array) : Result<Message2, string>= 
+    if msg_bytes.Length < randomDataLen + 4 then Error "Not enough bytes for a parsed M2"
+    else(
+        Ok { time = System.BitConverter.ToUInt32 msg_bytes[0..3] 
+             time2 = System.BitConverter.ToUInt32 msg_bytes[4..7]
+             // we skip an extra word here because the spec has zeros in time2 slot (which I didn't represent in data model)
+             random_echo = msg_bytes[8..8 + randomDataLen - 1]})
+
 let processRestOfBytes b =
     match b with
     | [||] -> None
@@ -195,7 +206,16 @@ let receive (state: AppState) =
         |> Result.bind (fun _ ->
             Ok {state with    
                     handshake_state = AckSent})
-    | AckSent -> Error "not impl"
+    | AckSent -> 
+        let stream = state.stream.Value
+        let readbuf = Array.zeroCreate<byte> message2Size
+        stream.ReadExactly(readbuf, 0, message2Size)
+        printfn "Read %i bytes for m2" readbuf.Length
+        readbuf
+        |> parseMessage2
+        |> Result.bind (fun m2 -> printfn "Got M2 %A" m2; Ok ())
+        |> Result.bind (fun _ -> 
+            Ok {state with handshake_state = Done})
     | Done -> Error "not impl"
 
 
