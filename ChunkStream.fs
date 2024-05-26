@@ -1,11 +1,8 @@
-// TODO: flatten version sent state to get around non-buffered send API
-// TODO: use a custom binary parser combinator setup rather than custom functions for serialize and deserialize
-
 module rtmpoop.ChunkStream
 
 open System.Net.Sockets
 
-type Version = uint8
+type Version = byte
 
 let unimplemented() = raise (new System.NotImplementedException())
 
@@ -19,28 +16,35 @@ let createVersion (b: uint8) =
     | x -> Ok(x)
 
 
-type Message0 = { version: Version }
+type Message0 = 
+    { version: Version }
+    
+let message0Size = 1
 
-let createMessage0 () = { version = rtmpoopVersion }
+let createMessage0 () = 
+    { version = rtmpoopVersion }
 
 type Time = uint32
 
-let epochStart = 0u
+let epochStart: Time = 0u
 
 type Message1 =
     {
         /// Time used as the epoch for all future timestamps
         time: Time
+        zero_time: Time
         /// Any random data of length 1528 bytes
         random_data: uint8 array
     }
 
 let randomDataLen = 1528
+let message1Size = 4 + 4 + randomDataLen
 
 let createMessage1 () =
     let rand = System.Random() in
 
     { time = epochStart
+      zero_time = 0u
       random_data = [| for _ in 0 .. randomDataLen - 1 -> uint8 (rand.Next()) |] }
 
 type Message2 =
@@ -66,19 +70,24 @@ type HandshakeState =
 
 type AppState =
     { handshake_state: HandshakeState
-      socket: Socket 
-      rest: byte array option}
+      listener : TcpListener
+      epoch_start: System.DateTime
+      stream: NetworkStream option}
 
-let createSocket port =
-    let s = new Socket(AddressFamily.InterNetwork, SocketType.Stream, ProtocolType.Tcp)
-    s.Bind(new System.Net.IPEndPoint(System.Net.IPAddress.Loopback, port))
-    s.Listen(10)
-    s
+
+let createListener port =
+    let listener = 
+        new TcpListener(
+            System.Net.IPAddress.Loopback,
+            port)
+    listener.Start(10)
+    listener
 
 let createAppState (port: int) =
     { handshake_state = Uninitialized
-      socket = createSocket port
-      rest = None}
+      listener = createListener port
+      stream = None
+      epoch_start = System.DateTime.Now}
 
 type Message =
     | M0 of Message0
@@ -114,62 +123,41 @@ let sendM1 () =
     let m = createMessage1 ()
     serializeM1 m
 
-let receiveM0 (socket: Socket) (msg: Message0) =
+let receiveM0 (stream: NetworkStream) (msg: Message0) =
     match msg.version with
     | v when v <= rtmpoopVersion ->
-        Array.append (sendM0 ()) (sendM1 ())
-        |> send socket
+        sendM0 () |> stream.Write
+        sendM1 () |> stream.Write
         printfn "Sent M0 M1"
         Ok()
     | _ -> Error "Unsupported version detected"
     
-let receiveM1 (socket: Socket) (msg: Message1) =
-    createMessage2 1u msg
+let calculateCurTime (epoch_start: System.DateTime) =
+    let cur = System.DateTime.Now
+    let diff = cur.Subtract(epoch_start)
+    diff.TotalMilliseconds
+    |> uint32
+    
+let receiveM1 (stream: NetworkStream) (epoch_start: System.DateTime) (msg: Message1) =
+    let cur_time = calculateCurTime epoch_start
+    createMessage2 cur_time msg
     |> serializeM2
-    |> send socket
+    |> stream.Write
     printfn "Sent M2"
     Ok ()
-    
 
-let recv (state: AppState) =
-    match state.rest with
-    | Some (bytes) -> 
-        printfn "Replaying %i previously unparsed bytes" bytes.Length
-        bytes
-    | None -> 
-        let mutable buf = [||]
-        let mutable total = 0
-        let mutable keep_reading = true
-
-        while keep_reading do
-            let read_buf: byte array = Array.zeroCreate 1024
-            let n = state.socket.Receive read_buf
-            printfn "Read %i bytes" n
-
-            if n = 0 then
-                keep_reading <- false
-            else
-                buf <- Array.append buf read_buf
-                total <- total + n
-
-        printfn "Finished reading %i bytes" total
-        buf
-    
 let parseMessage0 (msg_bytes: byte array) =
-    if msg_bytes.Length <= 1 then
-        Error "Not enough bytes for a parsed M0"
-    else
-        createVersion msg_bytes[0] |> Result.bind (fun ver -> Ok ({ version = ver }, msg_bytes[1..]))
+    createVersion msg_bytes[0] 
+    |> Result.bind (fun ver ->
+        Ok { version = ver } )
         
-let parseMessage1 (msg_bytes: byte array) : Result<Message1 * byte array, string>= 
+let parseMessage1 (msg_bytes: byte array) : Result<Message1, string>= 
     if msg_bytes.Length < 1528 + 4 then Error "Not enough bytes for a parsed M1"
     else(
-        printfn "Parsed M1"
-        Ok ({time = System.BitConverter.ToUInt32 msg_bytes[0..3] 
+        Ok { time = System.BitConverter.ToUInt32 msg_bytes[0..3] 
+             zero_time = System.BitConverter.ToUInt32 msg_bytes[4..7]
              // we skip an extra word here because the spec has zeros in time2 slot (which I didn't represent in data model)
-             random_data = msg_bytes[8..8 + 1528 - 1]},
-            msg_bytes[4 + 1528..])
-    )
+             random_data = msg_bytes[8..8 + randomDataLen - 1]})
         
 let processRestOfBytes b =
     match b with
@@ -179,32 +167,34 @@ let processRestOfBytes b =
 let receive (state: AppState) =
     match state.handshake_state with
     | Uninitialized ->
-        let handler = state.socket.Accept()
-        let initialized_state = {state with socket = handler}
-        let received_bytes = recv initialized_state
-        received_bytes 
+        let client = state.listener.AcceptTcpClient()
+        let stream = client.GetStream()
+        let received_m0_bytes = Array.zeroCreate<byte> message0Size
+        stream.ReadExactly(received_m0_bytes, 0, message0Size)
+        printfn "Read %i bytes for m0" received_m0_bytes.Length
+        received_m0_bytes 
         |> parseMessage0
-        |> Result.bind (fun (m0, rest) -> 
-                receiveM0 handler m0
-                |> Result.bind (fun _ -> 
-                    Ok(rest))
-            )
-        |> Result.bind (fun rest ->
-            Ok {    handshake_state = VersionSent
-                    socket = handler
-                    rest = processRestOfBytes rest })
-    | VersionSent ->
-        recv state
-        |> parseMessage1
-        |> Result.bind (fun (m1, rest) -> 
-                printfn "M1 is %A" m1
-                receiveM1 state.socket m1
-                |> Result.bind (fun _ -> Ok (rest))
-            )
-        |> Result.bind (fun rest ->
-            Ok {state with    
+        |> Result.bind (fun m0 -> 
+                receiveM0 stream m0)
+        |> Result.bind (fun _ -> 
+            Ok {state with 
                     handshake_state = VersionSent
-                    rest = processRestOfBytes rest })
+                    stream = Some stream})
+    | VersionSent ->
+        let stream = state.stream.Value
+        let readbuf = Array.zeroCreate<byte> message1Size
+        stream.ReadExactly(readbuf, 0, message1Size)
+        printfn "Read %i bytes for m1" readbuf.Length
+        readbuf
+        |> parseMessage1
+        |> Result.bind (fun m1 -> 
+                printfn "M1 is %A" m1
+                printfn "M1 rand_data len is %i" m1.random_data.Length
+                receiveM1 stream  state.epoch_start m1
+            )
+        |> Result.bind (fun _ ->
+            Ok {state with    
+                    handshake_state = AckSent})
     | AckSent -> Error "not impl"
     | Done -> Error "not impl"
 
