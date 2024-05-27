@@ -6,7 +6,9 @@
   <ItemGroup>
     <Compile Include="Network.fs" />
     <Compile Include="Time.fs" />
-    <Compile Include="Messages.fs" />
+    <Compile Include="RTMPMessages.fs" />
+    <Compile Include="ChunkMessages.fs" />
+    <Compile Include="HandshakeMessages.fs" />
     <Compile Include="AppState.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>

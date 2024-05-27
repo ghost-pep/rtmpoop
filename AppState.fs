@@ -1,7 +1,7 @@
 module ChunkStream
 
 open System.Net.Sockets
-open Messages
+open HandshakeMessages
 open Time
 open Network
 

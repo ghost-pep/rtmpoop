@@ -1,4 +1,4 @@
-module Messages
+module HandshakeMessages
 
 open Time
 let randomDataSize = 1528
