@@ -4,7 +4,10 @@
     <TargetFramework>net8.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
-    <Compile Include="ChunkStream.fs" />
+    <Compile Include="Network.fs" />
+    <Compile Include="Time.fs" />
+    <Compile Include="Messages.fs" />
+    <Compile Include="AppState.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>
 </Project>

@@ -1,7 +1,10 @@
-﻿open rtmpoop.ChunkStream
+﻿open ChunkStream
 
 printfn "Starting up"
-let appstate = createAppState 1935
+
+let appstate =
+    createAppState (System.Net.IPAddress([| 127uy; 0uy; 0uy; 1uy |])) 1935
+
 printfn "Created app state"
 
 match run appstate with
