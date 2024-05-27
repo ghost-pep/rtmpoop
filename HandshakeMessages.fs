@@ -1,10 +1,19 @@
 module HandshakeMessages
 
 open Time
-let randomDataSize = 1528
 
 type Version = byte
+type Message0 = { version: Version }
+type Message1 = { time: Time; random_data: byte array }
+
+type Message2 =
+    { peer_time: Time
+      local_time: Time
+      random_echo: uint8 array }
+
 let rtmpoopVersion = 3uy
+let message0Size = 1
+let randomDataSize = 1528
 
 let parseVersion (b: byte) =
     match b with
@@ -12,8 +21,6 @@ let parseVersion (b: byte) =
     | x when x >= 32uy -> Error "Version not allowed to disambiguate from text-based protocols"
     | x -> Ok(x)
 
-type Message0 = { version: Version }
-let message0Size = 1
 let createMessage0 () = { version = rtmpoopVersion }
 
 let parseMessage0 (raw: byte array) =
@@ -23,7 +30,6 @@ let parseMessage0 (raw: byte array) =
 
 let serializeM0 (m: Message0) = [| byte m.version |]
 
-type Message1 = { time: Time; random_data: byte array }
 let message1Size = timeSize + timeSize + randomDataSize
 
 let createMessage1 () =
@@ -43,11 +49,6 @@ let parseMessage1 (raw: byte array) =
 
 let serializeM1 (m: Message1) =
     System.BitConverter.GetBytes m.time |> Array.append m.random_data
-
-type Message2 =
-    { peer_time: Time
-      local_time: Time
-      random_echo: uint8 array }
 
 let message2Size = timeSize + timeSize + randomDataSize
 
