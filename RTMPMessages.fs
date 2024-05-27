@@ -156,11 +156,30 @@ type FlashObject =
 
 type Message =
     | UserControl of UserControlEvent
-    | Command of Command
-    | Data
-    | SharedObject of FlashObject
+    | AMF0Command of Command
+    | AMF3Command of Command
+    | AMF0Data
+    | AMF3Data
+    | AMF0SharedObject of FlashObject
+    | AMF3SharedObject of FlashObject
     | Audio
     | Video
     | Aggregate
 
 type RTMPMessage = StreamId * Message
+
+let serializeMessageType ((_, msg): RTMPMessage) =
+    match msg with
+    | UserControl _ -> 4uy
+    | AMF0Command _ -> 20uy
+    | AMF3Command _ -> 17uy
+    | AMF0Data -> 18uy
+    | AMF3Data -> 15uy
+    | AMF0SharedObject _ -> 19uy
+    | AMF3SharedObject _ -> 16uy
+    | Audio -> 8uy
+    | Video -> 9uy
+    | Aggregate -> 22uy
+
+let serializeMessage (msg: RTMPMessage) =
+    raise (new System.NotImplementedException())
