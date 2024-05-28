@@ -10,6 +10,7 @@
     <Compile Include="RTMPMessages.fs" />
     <Compile Include="ChunkMessages.fs" />
     <Compile Include="HandshakeMessages.fs" />
+    <Compile Include="Server.fs" />
     <Compile Include="Handshake.fs" />
     <Compile Include="AppState.fs" />
     <Compile Include="Program.fs" />

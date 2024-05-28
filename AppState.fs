@@ -3,10 +3,11 @@ module ChunkStream
 open System.Net.Sockets
 open Network
 open Handshake
+open Server
 
 type State =
     | Handshake of HandshakeState
-    | Receiving
+    | Receiving of ServerState
 
 type Connection =
     { state: State
@@ -28,8 +29,13 @@ let next (conn: Connection) =
     | Handshake x when x <> Done ->
         handshake_next x conn.stream
         |> Result.bind (fun n -> Ok { conn with state = Handshake n })
-    | Handshake _ -> Ok { conn with state = Receiving }
-    | Receiving -> Ok conn
+    | Handshake _ ->
+        Ok
+            { conn with
+                state = Receiving(createServerState ()) }
+    | Receiving x ->
+        receive_chunk conn.stream x
+        |> Result.bind (fun n -> Ok { conn with state = Receiving n })
 
 
 let rec run (conn: Connection) =

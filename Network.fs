@@ -9,3 +9,8 @@ let createListener ip port =
 
 let getClient (listener: TcpListener) = listener.AcceptTcpClient()
 let getStream (client: TcpClient) = client.GetStream()
+
+let readN (stream: NetworkStream) (n: int) =
+    let read_buf = Array.zeroCreate n
+    stream.ReadExactly(read_buf, 0, n)
+    read_buf

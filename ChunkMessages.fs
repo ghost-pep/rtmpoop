@@ -28,6 +28,7 @@ type ProtocolControlMessage =
 type MessageType =
     | RTMP of RTMPMessage
     | ProtocolControl of ProtocolControlMessage
+    | Unparsed
 
 type Message =
     { hdr_type: HeaderType
@@ -65,21 +66,23 @@ let serializeProtocolControlMessageType (msg: ProtocolControlMessage) =
 
 let serializeMessageType (msg: MessageType) =
     match msg with
-    | RTMP x -> serializeMessageType x
-    | ProtocolControl x -> serializeProtocolControlMessageType x
+    | RTMP x -> Ok([| serializeMessageType x |])
+    | ProtocolControl x -> Ok([| serializeProtocolControlMessageType x |])
+    | Unparsed -> Result.Error "Cannot serialize an unparsed message"
 
 let serializeMessageStreamId (msg: MessageType) =
     match msg with
-    | RTMP(stream_id, _) -> System.BitConverter.GetBytes(stream_id)
-    | ProtocolControl _ -> System.BitConverter.GetBytes(0u)
+    | RTMP(stream_id, _) -> Ok(System.BitConverter.GetBytes(stream_id))
+    | ProtocolControl _ -> Ok(System.BitConverter.GetBytes(0u))
+    | Unparsed -> Result.Error "Cannot serialize an unparsed message"
 
 let serializeMessageHeader (msg: Message) (ts_raw: Time) (delta: Time option) =
     match msg.hdr_type with
     | HeaderType.Type0 ->
         serializeTimestamp ts_raw
         |> combineOn Array.append (Ok(System.BitConverter.GetBytes(msg.msg_len)[1..3]))
-        |> combineOn Array.append (Ok [| serializeMessageType msg.msg |])
-        |> combineOn Array.append (Ok(serializeMessageStreamId msg.msg))
+        |> combineOn Array.append (serializeMessageType msg.msg)
+        |> combineOn Array.append (serializeMessageStreamId msg.msg)
     | HeaderType.Type1 ->
         let delta_res =
             match delta with
@@ -89,7 +92,7 @@ let serializeMessageHeader (msg: Message) (ts_raw: Time) (delta: Time option) =
         delta_res
         |> Result.bind serializeTimestamp
         |> combineOn Array.append (Ok(System.BitConverter.GetBytes(msg.msg_len)[1..3]))
-        |> combineOn Array.append (Ok [| serializeMessageType msg.msg |])
+        |> combineOn Array.append (serializeMessageType msg.msg)
     | HeaderType.Type2 ->
         let delta_res =
             match delta with
@@ -126,8 +129,9 @@ let serializeMessage (m: ProtocolControlMessage) =
 
 let serializeChunkData (msg: Message) =
     match msg.msg with
-    | RTMP m -> RTMPMessages.serializeMessage m
-    | ProtocolControl m -> serializeMessage m
+    | RTMP m -> Ok(RTMPMessages.serializeMessage m)
+    | ProtocolControl m -> Ok(serializeMessage m)
+    | Unparsed -> Result.Error "Cannot serialize an unparsed message"
 
 
 let serializeChunk (c: Chunk) (epoch_start: System.DateTime) (prev_chunk_at: Time option) =
@@ -140,3 +144,8 @@ let serializeChunk (c: Chunk) (epoch_start: System.DateTime) (prev_chunk_at: Tim
     |> combineOn Array.append (serializeMessageHeader c.msg ts delta)
     |> combineOn Array.append (serializeExtendedTS c.msg.hdr_type ts delta)
     |> combineOn Array.append (serializeChunkData c.msg)
+
+let parseFmt (data: byte) =
+    LanguagePrimitives.EnumOfValue<byte, HeaderType>(data >>> 6)
+
+let parseChunkStreamId (data: byte) = (data <<< 2) >>> 2
