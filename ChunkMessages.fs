@@ -167,8 +167,8 @@ let type1Size = 7
 let Type2Size = 3
 
 let parseType0 (stream: StreamId) (data: byte array) =
-    let ts: Time = System.BitConverter.ToUInt32(data[0..2])
-    let msg_len = System.BitConverter.ToUInt32(data[3..5])
+    let ts: Time = Array.append [| 0uy |] data[0..2] |> System.BitConverter.ToUInt32
+    let msg_len = Array.append [| 0uy |] data[3..5] |> System.BitConverter.ToUInt32
     let msg_type = data[6]
     let msg_stream_id = System.BitConverter.ToUInt32(data[7..10])
 
