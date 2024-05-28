@@ -80,9 +80,9 @@ let serializeMessageHeader (msg: Message) (ts_raw: Time) (delta: Time option) =
     match msg.hdr_type with
     | HeaderType.Type0 ->
         serializeTimestamp ts_raw
-        |> combineOn Array.append (Ok(System.BitConverter.GetBytes(msg.msg_len)[1..3]))
-        |> combineOn Array.append (serializeMessageType msg.msg)
-        |> combineOn Array.append (serializeMessageStreamId msg.msg)
+        |> combineOn appendOk (Ok(System.BitConverter.GetBytes(msg.msg_len)[1..3]))
+        |> combineOn appendOk (serializeMessageType msg.msg)
+        |> combineOn appendOk (serializeMessageStreamId msg.msg)
     | HeaderType.Type1 ->
         let delta_res =
             match delta with
@@ -91,8 +91,8 @@ let serializeMessageHeader (msg: Message) (ts_raw: Time) (delta: Time option) =
 
         delta_res
         |> Result.bind serializeTimestamp
-        |> combineOn Array.append (Ok(System.BitConverter.GetBytes(msg.msg_len)[1..3]))
-        |> combineOn Array.append (serializeMessageType msg.msg)
+        |> combineOn appendOk (Ok(System.BitConverter.GetBytes(msg.msg_len)[1..3]))
+        |> combineOn appendOk (serializeMessageType msg.msg)
     | HeaderType.Type2 ->
         let delta_res =
             match delta with
@@ -124,6 +124,12 @@ let serializeExtendedTS (msg: HeaderType) (ts: Time) (delta: Time option) =
     | HeaderType.Type3 -> Ok [||]
     | _ -> Result.Error "Impossible Message HeaderType"
 
+let streamIdFrom (msg: Message) =
+    match msg.msg with
+    | RTMP(stream_id, _) -> Ok stream_id
+    | ProtocolControl _ -> Ok 0u
+    | Unparsed -> Result.Error "Cannot serialize an unparsed message"
+
 let serializeMessage (m: ProtocolControlMessage) =
     raise (new System.NotImplementedException())
 
@@ -141,11 +147,136 @@ let serializeChunk (c: Chunk) (epoch_start: System.DateTime) (prev_chunk_at: Tim
         prev_chunk_at |> Option.bind (fun prev -> Some((uint32 ts) - (uint32 prev)))
 
     serializeBasicHeader c
-    |> combineOn Array.append (serializeMessageHeader c.msg ts delta)
-    |> combineOn Array.append (serializeExtendedTS c.msg.hdr_type ts delta)
-    |> combineOn Array.append (serializeChunkData c.msg)
+    |> combineOn appendOk (serializeMessageHeader c.msg ts delta)
+    |> combineOn appendOk (serializeExtendedTS c.msg.hdr_type ts delta)
+    |> combineOn appendOk (serializeChunkData c.msg)
 
 let parseFmt (data: byte) =
     LanguagePrimitives.EnumOfValue<byte, HeaderType>(data >>> 6)
 
-let parseChunkStreamId (data: byte) = (data <<< 2) >>> 2
+let sub_64 = (fun c -> c - 64u)
+let parseChunkStreamId1 (data: byte array) = data |> Array.head |> uint32 |> sub_64
+
+let parseChunkStreamId2 (data: byte array) =
+    data |> System.BitConverter.ToUInt32 |> sub_64
+
+let parseChunkStreamId (data: byte) = (data <<< 2) >>> 2 |> uint32
+
+let type0Size = 11
+let type1Size = 7
+let Type2Size = 3
+
+let parseType0 (stream: StreamId) (data: byte array) =
+    let ts: Time = System.BitConverter.ToUInt32(data[0..2])
+    let msg_len = System.BitConverter.ToUInt32(data[3..5])
+    let msg_type = data[6]
+    let msg_stream_id = System.BitConverter.ToUInt32(data[7..10])
+
+    Ok(
+        { stream = stream
+          msg =
+            { hdr_type = HeaderType.Type0
+              ts = ts
+              msg_len = msg_len
+              msg = Unparsed } },
+        msg_type,
+        msg_stream_id
+    )
+
+let parseType1 (prev_chunk: Chunk option) (stream: StreamId) (data: byte array) =
+    let delta = System.BitConverter.ToUInt32(data[0..2])
+    let msg_len = System.BitConverter.ToUInt32(data[3..5])
+    let msg_type = data[6]
+
+    let msg_stream_id_res =
+        match prev_chunk |> Option.map (fun c -> streamIdFrom c.msg) with
+        | Some(x) -> x
+        | None -> Result.Error "No previous chunk to calculate stream id from"
+
+    let ts_res =
+        match prev_chunk with
+        | Some c -> Ok(c.msg.ts + delta)
+        | None -> Result.Error "No previous chunk to calculate timestamp from"
+
+    ts_res
+    |> combineOn (fun ts msg_stream_id -> Ok(ts, msg_stream_id)) msg_stream_id_res
+    |> Result.bind (fun (msg_stream_id, ts) ->
+        Ok(
+            { stream = stream
+              msg =
+                { hdr_type = HeaderType.Type1
+                  ts = ts
+                  msg_len = msg_len
+                  msg = Unparsed } },
+            msg_type,
+            msg_stream_id
+        ))
+
+let parseType2 (prev_chunk: Chunk option) (stream: StreamId) (data: byte array) =
+    let prev_chunk_res =
+        match prev_chunk with
+        | Some c -> Ok c
+        | None -> Result.Error "No previous chunk to calculate from"
+
+    let delta = System.BitConverter.ToUInt32(data[0..2])
+
+    let ts_res = prev_chunk_res |> Result.bind (fun c -> Ok(c.msg.ts + delta))
+    let msg_len_res = prev_chunk_res |> Result.bind (fun c -> Ok(c.msg.msg_len))
+
+    let msg_type_res =
+        prev_chunk_res
+        |> Result.bind (fun c -> c.msg.msg |> serializeMessageType |> Result.bind (fun b -> Ok(Array.head b)))
+
+
+    // TODO: This feels wrong... is there a better way to get some nice combinator here that doesn't require me to keep tupling?
+    // maybe this is a problem with not having the concept of type kinds? Idk and this is burning me out right now
+    ts_res
+    |> combineOn (fun msg_len ts -> Ok(ts, msg_len)) msg_len_res
+    |> combineOn (fun msg_type (ts, msg_len) -> Ok(ts, msg_len, msg_type)) msg_type_res
+    |> combineOn
+        (fun msg_stream_id (ts, msg_len, msg_type) -> Ok(ts, msg_len, msg_type, msg_stream_id))
+        (prev_chunk_res |> Result.bind (fun c -> streamIdFrom c.msg))
+    |> Result.bind (fun (ts, msg_len, msg_type, msg_stream_id) ->
+        Ok(
+            { stream = stream
+              msg =
+                { hdr_type = HeaderType.Type2
+                  ts = ts
+                  msg_len = msg_len
+                  msg = Unparsed } },
+            msg_type,
+            msg_stream_id
+        ))
+
+let parseType3 (prev_chunk: Chunk option) (stream: StreamId) =
+    let prev_chunk_res =
+        match prev_chunk with
+        | Some c -> Ok c
+        | None -> Result.Error "No previous chunk to calculate from"
+
+    let ts_res = prev_chunk_res |> Result.bind (fun c -> Ok(c.msg.ts))
+    let msg_len_res = prev_chunk_res |> Result.bind (fun c -> Ok(c.msg.msg_len))
+
+    let msg_type_res =
+        prev_chunk_res
+        |> Result.bind (fun c -> c.msg.msg |> serializeMessageType |> Result.bind (fun b -> Ok(Array.head b)))
+
+    let msg_stream_id_res = prev_chunk_res |> Result.bind (fun c -> streamIdFrom c.msg)
+
+    ts_res
+    |> combineOn (fun msg_len ts -> Ok(ts, msg_len)) msg_len_res
+    |> combineOn (fun msg_type (ts, msg_len) -> Ok(ts, msg_len, msg_type)) msg_type_res
+    |> combineOn
+        (fun msg_stream_id (ts, msg_len, msg_type) -> Ok(ts, msg_len, msg_type, msg_stream_id))
+        msg_stream_id_res
+    |> Result.bind (fun (ts, msg_len, msg_type, msg_stream_id) ->
+        Ok(
+            { stream = stream
+              msg =
+                { hdr_type = HeaderType.Type3
+                  ts = ts
+                  msg_len = msg_len
+                  msg = Unparsed } },
+            msg_type,
+            msg_stream_id
+        ))
