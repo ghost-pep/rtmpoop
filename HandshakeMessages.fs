@@ -48,7 +48,9 @@ let parseMessage1 (raw: byte array) =
     | _ -> Error "Incorrect message 1 byte length"
 
 let serializeM1 (m: Message1) =
-    System.BitConverter.GetBytes m.time |> Array.append m.random_data
+    let time = System.BitConverter.GetBytes m.time
+    let zero = Array.append time (System.BitConverter.GetBytes 0u)
+    Array.append zero m.random_data
 
 let message2Size = timeSize + timeSize + randomDataSize
 
@@ -67,6 +69,6 @@ let parseMessage2 (raw: byte array) =
     | _ -> Error "Incorrect message 2 byte length"
 
 let serializeM2 (m: Message2) =
-    System.BitConverter.GetBytes m.peer_time
-    |> Array.append (System.BitConverter.GetBytes m.local_time)
-    |> Array.append m.random_echo
+    let peer = System.BitConverter.GetBytes m.peer_time
+    let local = Array.append peer (System.BitConverter.GetBytes m.local_time)
+    Array.append local m.random_echo

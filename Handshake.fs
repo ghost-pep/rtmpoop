@@ -11,9 +11,9 @@ type HandshakeState =
     | Done
 
 let sendM0M1 (stream: NetworkStream) =
-    createMessage0 () |> serializeM0 |> stream.Write
+    let m0 = createMessage0 () |> serializeM0
     let m1 = createMessage1 ()
-    m1 |> serializeM1 |> stream.Write
+    Array.append m0 (m1 |> serializeM1) |> stream.Write
     Ok m1.random_data
 
 let sendM2 (stream: NetworkStream) (msg: Message1) =
@@ -50,12 +50,5 @@ let handshake_next (state: HandshakeState) (stream: NetworkStream) =
             if challenge = m2.random_echo then
                 Ok Done
             else
-                printfn "challenge: %A" challenge
-                printfn "echo: %A" m2.random_echo
-                let converted = challenge[0..3] |> System.BitConverter.ToInt32
-                let actual = System.Net.IPAddress.NetworkToHostOrder(converted)
-                let echo = m2.random_echo[0..3] |> System.BitConverter.ToInt32
-                printfn "%A %A" actual echo
-                //TODO: Is this a problem with endianness? Doesn't seem to be based on the byte order but maybe I'm dumb
                 Error "Failed to validate challenge")
     | Done -> Ok Done
