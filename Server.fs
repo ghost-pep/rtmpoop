@@ -21,12 +21,14 @@ let receive_chunk (stream: NetworkStream) (state: ServerState) =
 
     printfn "Got stream id %A" cs_id
 
-    let Ok (unparsed_chunk, msg_type, msg_stream_id) =
+    let unparsed_chunk =
         match fmt with
         | HeaderType.Type0 -> readN stream type0Size |> parseType0 cs_id
         | HeaderType.Type1 -> readN stream type1Size |> parseType1 state.prev_chunk cs_id
         | HeaderType.Type2 -> readN stream Type2Size |> parseType2 state.prev_chunk cs_id
         | HeaderType.Type3 -> parseType3 state.prev_chunk cs_id
         | _ -> Error "Impossible Message HeaderType"
+
+    printfn "Unparsed chunk %A" unparsed_chunk
 
     Error "Not implemented yet"
